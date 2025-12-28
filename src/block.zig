@@ -150,21 +150,24 @@ pub fn Block(
         /// the first arg. The first arg is a pointer so from an ABI perspective
         /// this is always the same and can be safely casted.
         fn FnType(comptime ContextArg: type) type {
-            var params: [Args.len + 1]std.builtin.Type.Fn.Param = undefined;
-            params[0] = .{ .is_generic = false, .is_noalias = false, .type = *const ContextArg };
+            var param_types: [Args.len + 1]type = undefined;
+            param_types[0] = *const ContextArg;
             for (Args, 1..) |Arg, i| {
-                params[i] = .{ .is_generic = false, .is_noalias = false, .type = Arg };
+                param_types[i] = Arg;
             }
 
-            return @Type(.{
-                .@"fn" = .{
-                    .calling_convention = .c,
-                    .is_generic = false,
-                    .is_var_args = false,
-                    .return_type = Return,
-                    .params = &params,
-                },
-            });
+            // Create param attributes (all default)
+            var param_attrs: [Args.len + 1]std.builtin.Type.Fn.Param.Attributes = undefined;
+            for (&param_attrs) |*attr| {
+                attr.* = .{};
+            }
+
+            return @Fn(
+                &param_types,
+                &param_attrs,
+                Return,
+                .{ .calling_convention = .c },
+            );
         }
     };
 }
@@ -226,14 +229,29 @@ fn BlockContext(comptime Captures: type, comptime InvokeFn: type) type {
         };
     }
 
-    return @Type(.{
-        .@"struct" = .{
-            .layout = .@"extern",
-            .fields = &fields,
-            .decls = &.{},
-            .is_tuple = false,
-        },
-    });
+    // Convert to @Struct format
+    const num_fields = captures_info.fields.len + 5;
+    var field_names: [num_fields][]const u8 = undefined;
+    var field_types: [num_fields]type = undefined;
+    var field_attrs: [num_fields]std.builtin.Type.StructField.Attributes = undefined;
+
+    for (fields[0..num_fields], 0..) |field, i| {
+        field_names[i] = field.name;
+        field_types[i] = field.type;
+        field_attrs[i] = .{
+            .alignment = field.alignment,
+            .default_value = field.default_value_ptr,
+            .is_comptime = field.is_comptime,
+        };
+    }
+
+    return @Struct(
+        .@"extern",
+        null,
+        &field_names,
+        &field_types,
+        &field_attrs,
+    );
 }
 
 // Pointer to opaque instead of anyopaque: https://github.com/ziglang/zig/issues/18461

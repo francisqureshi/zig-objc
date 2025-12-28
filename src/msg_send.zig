@@ -4,6 +4,68 @@ const assert = std.debug.assert;
 const c = @import("c.zig").c;
 const objc = @import("main.zig");
 
+/// Helper to unwrap a single argument - extracts .value from Object/Class/Sel if present
+inline fn unwrapArg(arg: anytype) unwrapType(@TypeOf(arg)) {
+    const ArgType = @TypeOf(arg);
+
+    // Special case: if it's exactly objc.Object, unwrap it
+    if (ArgType == objc.Object) {
+        return arg.value;
+    }
+
+    // Check if this type has a .value field that's exactly c.id type
+    // (this handles Class, Sel, etc., but not other structs with value fields)
+    if (@typeInfo(ArgType) == .@"struct") {
+        const struct_info = @typeInfo(ArgType).@"struct";
+        inline for (struct_info.fields) |struct_field| {
+            if (std.mem.eql(u8, struct_field.name, "value") and
+                @sizeOf(struct_field.type) == @sizeOf(c.id) and
+                @typeInfo(struct_field.type) == .optional) {
+                // This looks like an objc wrapper (has optional pointer .value)
+                return arg.value;
+            }
+        }
+    }
+    return arg;
+}
+
+/// Helper to build an unwrapped args tuple from the original args
+inline fn buildUnwrappedArgs(args: anytype) @TypeOf(buildUnwrappedArgsImpl(args)) {
+    return buildUnwrappedArgsImpl(args);
+}
+
+inline fn buildUnwrappedArgsImpl(args: anytype) @TypeOf(blk: {
+    const args_info = @typeInfo(@TypeOf(args)).@"struct";
+    break :blk switch (args_info.fields.len) {
+        0 => .{},
+        1 => .{unwrapArg(args[0])},
+        2 => .{ unwrapArg(args[0]), unwrapArg(args[1]) },
+        3 => .{ unwrapArg(args[0]), unwrapArg(args[1]), unwrapArg(args[2]) },
+        4 => .{ unwrapArg(args[0]), unwrapArg(args[1]), unwrapArg(args[2]), unwrapArg(args[3]) },
+        5 => .{ unwrapArg(args[0]), unwrapArg(args[1]), unwrapArg(args[2]), unwrapArg(args[3]), unwrapArg(args[4]) },
+        6 => .{ unwrapArg(args[0]), unwrapArg(args[1]), unwrapArg(args[2]), unwrapArg(args[3]), unwrapArg(args[4]), unwrapArg(args[5]) },
+        7 => .{ unwrapArg(args[0]), unwrapArg(args[1]), unwrapArg(args[2]), unwrapArg(args[3]), unwrapArg(args[4]), unwrapArg(args[5]), unwrapArg(args[6]) },
+        8 => .{ unwrapArg(args[0]), unwrapArg(args[1]), unwrapArg(args[2]), unwrapArg(args[3]), unwrapArg(args[4]), unwrapArg(args[5]), unwrapArg(args[6]), unwrapArg(args[7]) },
+        else => @compileError("unwrapArgs: too many arguments (max 8 supported)"),
+    };
+}) {
+    const args_info = @typeInfo(@TypeOf(args)).@"struct";
+
+    // Manually build the unwrapped tuple based on the number of args
+    return switch (args_info.fields.len) {
+        0 => .{},
+        1 => .{unwrapArg(args[0])},
+        2 => .{ unwrapArg(args[0]), unwrapArg(args[1]) },
+        3 => .{ unwrapArg(args[0]), unwrapArg(args[1]), unwrapArg(args[2]) },
+        4 => .{ unwrapArg(args[0]), unwrapArg(args[1]), unwrapArg(args[2]), unwrapArg(args[3]) },
+        5 => .{ unwrapArg(args[0]), unwrapArg(args[1]), unwrapArg(args[2]), unwrapArg(args[3]), unwrapArg(args[4]) },
+        6 => .{ unwrapArg(args[0]), unwrapArg(args[1]), unwrapArg(args[2]), unwrapArg(args[3]), unwrapArg(args[4]), unwrapArg(args[5]) },
+        7 => .{ unwrapArg(args[0]), unwrapArg(args[1]), unwrapArg(args[2]), unwrapArg(args[3]), unwrapArg(args[4]), unwrapArg(args[5]), unwrapArg(args[6]) },
+        8 => .{ unwrapArg(args[0]), unwrapArg(args[1]), unwrapArg(args[2]), unwrapArg(args[3]), unwrapArg(args[4]), unwrapArg(args[5]), unwrapArg(args[6]), unwrapArg(args[7]) },
+        else => @compileError("unwrapArgs: too many arguments (max 8 supported)"),
+    };
+}
+
 /// Returns a struct that implements the msgSend function for type T.
 pub fn MsgSend(comptime T: type) type {
     // 1. T should be a struct
@@ -36,8 +98,11 @@ pub fn MsgSend(comptime T: type) type {
             // Build our function type and call it
             const Fn = MsgSendFn(RealReturn, @TypeOf(target.value), @TypeOf(args));
             const msg_send_fn = comptime msgSendPtr(RealReturn, false);
-            const msg_send_ptr: *const Fn = @ptrCast(msg_send_fn);
-            const result = @call(.auto, msg_send_ptr, .{ target.value, sel.value } ++ args);
+            const msg_send_ptr: *const Fn = @ptrCast(@alignCast(msg_send_fn));
+
+            // Unwrap any Object types in args to their underlying c.id
+            const unwrapped_args = buildUnwrappedArgs(args);
+            const result = @call(.auto, msg_send_ptr, .{ target.value, sel.value } ++ unwrapped_args);
 
             if (!is_object) return result;
             return .{ .value = result };
@@ -62,12 +127,15 @@ pub fn MsgSend(comptime T: type) type {
 
             const Fn = MsgSendFn(RealReturn, *c.objc_super, @TypeOf(args));
             const msg_send_fn = comptime msgSendPtr(RealReturn, true);
-            const msg_send_ptr: *const Fn = @ptrCast(msg_send_fn);
+            const msg_send_ptr: *const Fn = @ptrCast(@alignCast(msg_send_fn));
             var super: c.objc_super = .{
                 .receiver = target.value,
                 .class = superclass.value,
             };
-            const result = @call(.auto, msg_send_ptr, .{ &super, sel.value } ++ args);
+
+            // Unwrap any Object types in args to their underlying c.id
+            const unwrapped_args = buildUnwrappedArgs(args);
+            const result = @call(.auto, msg_send_ptr, .{ &super, sel.value } ++ unwrapped_args);
 
             if (!is_object) return result;
             return .{ .value = result };
@@ -169,6 +237,24 @@ pub fn MsgSend(comptime T: type) type {
 ///
 /// This comptime function returns the function body type that can be used
 /// to cast and call for the proper C ABI behavior.
+/// Helper to unwrap Object types to their underlying c.id type
+/// @Fn is stricter than @Type and requires actual C-compatible types
+fn unwrapType(comptime T: type) type {
+    // If it's our Object type, unwrap to c.id
+    if (T == objc.Object) return c.id;
+    // If it's a struct with a 'value' field of size c.id, use c.id
+    // (this handles Class, Sel, etc.)
+    if (@typeInfo(T) == .@"struct") {
+        const info = @typeInfo(T).@"struct";
+        for (info.fields) |field| {
+            if (std.mem.eql(u8, field.name, "value") and @sizeOf(field.type) == @sizeOf(c.id)) {
+                return c.id;
+            }
+        }
+    }
+    return T;
+}
+
 fn MsgSendFn(
     comptime Return: type,
     comptime Target: type,
@@ -181,36 +267,37 @@ fn MsgSendFn(
     // are an "id" so we just make sure the sizes match for ABI reasons.
     assert(@sizeOf(Target) == @sizeOf(c.id));
 
-    // Build up our argument types.
-    const Fn = std.builtin.Type.Fn;
-    const params: []Fn.Param = params: {
-        var acc: [argsInfo.fields.len + 2]Fn.Param = undefined;
+    // Build up our argument types and attributes for @Fn
+    const param_types: []const type = types: {
+        var acc: [argsInfo.fields.len + 2]type = undefined;
 
         // First argument is always the target and selector.
-        acc[0] = .{ .type = Target, .is_generic = false, .is_noalias = false };
-        acc[1] = .{ .type = c.SEL, .is_generic = false, .is_noalias = false };
+        acc[0] = Target;
+        acc[1] = c.SEL;
 
         // Remaining arguments depend on the args given, in the order given
+        // Unwrap any Object types to their underlying c.id
         for (argsInfo.fields, 0..) |field, i| {
-            acc[i + 2] = .{
-                .type = field.type,
-                .is_generic = false,
-                .is_noalias = false,
-            };
+            acc[i + 2] = unwrapType(field.type);
         }
 
-        break :params &acc;
+        break :types &acc;
     };
 
-    return @Type(.{
-        .@"fn" = .{
-            .calling_convention = .c,
-            .is_generic = false,
-            .is_var_args = false,
-            .return_type = Return,
-            .params = params,
-        },
-    });
+    const param_attrs: *const [param_types.len]std.builtin.Type.Fn.Param.Attributes = attrs: {
+        var acc: [param_types.len]std.builtin.Type.Fn.Param.Attributes = undefined;
+        for (&acc) |*attr| {
+            attr.* = .{}; // Default attributes (no noalias, etc.)
+        }
+        break :attrs &acc;
+    };
+
+    return @Fn(
+        param_types,
+        param_attrs,
+        Return,
+        .{ .@"callconv" = .c },
+    );
 }
 
 test {
