@@ -130,7 +130,7 @@ pub fn MsgSend(comptime T: type) type {
             const msg_send_ptr: *const Fn = @ptrCast(@alignCast(msg_send_fn));
             var super: c.objc_super = .{
                 .receiver = target.value,
-                .class = superclass.value,
+                .super_class = superclass.value,
             };
 
             // Unwrap any Object types in args to their underlying c.id

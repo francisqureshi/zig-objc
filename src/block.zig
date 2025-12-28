@@ -166,7 +166,7 @@ pub fn Block(
                 &param_types,
                 &param_attrs,
                 Return,
-                .{ .calling_convention = .c },
+                .{ .@"callconv" = .c },
             );
         }
     };
@@ -239,9 +239,7 @@ fn BlockContext(comptime Captures: type, comptime InvokeFn: type) type {
         field_names[i] = field.name;
         field_types[i] = field.type;
         field_attrs[i] = .{
-            .alignment = field.alignment,
-            .default_value = field.default_value_ptr,
-            .is_comptime = field.is_comptime,
+            .@"align" = field.alignment,
         };
     }
 
