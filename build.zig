@@ -68,7 +68,7 @@ pub fn addAppleSDK(b: *std.Build, m: *std.Build.Module) !void {
     if (!gop.found_existing) {
         gop.value_ptr.* = std.zig.system.darwin.getSdk(
             b.allocator,
-            // b.graph.io,
+            b.graph.io,
             &m.resolved_target.?.result,
         );
     }
